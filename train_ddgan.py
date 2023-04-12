@@ -27,6 +27,8 @@ from datasets_prep.lmdb_datasets import LMDBDataset
 from torch.multiprocessing import Process
 import torch.distributed as dist
 import shutil
+from swin_unitr.utils import get_loader
+from monai.networks.nets import SwinUNETR
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
@@ -201,73 +203,29 @@ def train(rank, gpu, args):
     
     nz = args.nz #latent dimension
     
-    if args.dataset == 'cifar10':
-        dataset = CIFAR10('./data', train=True, transform=transforms.Compose([
-                        transforms.Resize(32),
-                        transforms.RandomHorizontalFlip(),
-                        transforms.ToTensor(),
-                        transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))]), download=True)
-       
+    data_loader, train_sampler, val_loader = get_loader(batch_size, args.data_dir, args.json_list, args.fold, args.roi, args.world_size, rank)
     
-    elif args.dataset == 'stackmnist':
-        train_transform, valid_transform = _data_transforms_stacked_mnist()
-        dataset = StackedMNIST(root='./data', train=True, download=False, transform=train_transform)
-        
-    elif args.dataset == 'lsun':
-        
-        train_transform = transforms.Compose([
-                        transforms.Resize(args.image_size),
-                        transforms.CenterCrop(args.image_size),
-                        transforms.RandomHorizontalFlip(),
-                        transforms.ToTensor(),
-                        transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
-                    ])
-
-        train_data = LSUN(root='/datasets/LSUN/', classes=['church_outdoor_train'], transform=train_transform)
-        subset = list(range(0, 120000))
-        dataset = torch.utils.data.Subset(train_data, subset)
-      
+    netG = SwinUNETR(
+        img_size=args.roi,
+        in_channels=4,
+        out_channels=3,
+        feature_size=48,
+        drop_rate=0.0,
+        attn_drop_rate=0.0,
+        dropout_path_rate=0.0,
+        use_checkpoint=True,
+    ).to(device)
     
-    elif args.dataset == 'celeba_256':
-        train_transform = transforms.Compose([
-                transforms.Resize(args.image_size),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
-            ])
-        dataset = LMDBDataset(root='/datasets/celeba-lmdb/', name='celeba', train=True, transform=train_transform)
-      
-    
-    
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-                                                                    num_replicas=args.world_size,
-                                                                    rank=rank)
-    data_loader = torch.utils.data.DataLoader(dataset,
-                                               batch_size=batch_size,
-                                               shuffle=False,
-                                               num_workers=4,
-                                               pin_memory=True,
-                                               sampler=train_sampler,
-                                               drop_last = True)
-    
-    netG = NCSNpp(args).to(device)
-    
-
-    if args.dataset == 'cifar10' or args.dataset == 'stackmnist':    
-        netD = Discriminator_small(nc = 2*args.num_channels, ngf = args.ngf,
-                               t_emb_dim = args.t_emb_dim,
-                               act=nn.LeakyReLU(0.2)).to(device)
-    else:
-        netD = Discriminator_large(nc = 2*args.num_channels, ngf = args.ngf, 
-                                   t_emb_dim = args.t_emb_dim,
-                                   act=nn.LeakyReLU(0.2)).to(device)
+    netD = Discriminator_large(nc = 2*args.num_channels, ngf = args.ngf, 
+                                t_emb_dim = args.t_emb_dim,
+                                act=nn.LeakyReLU(0.2)).to(device)
     
     broadcast_params(netG.parameters())
     broadcast_params(netD.parameters())
     
     optimizerD = optim.Adam(netD.parameters(), lr=args.lr_d, betas = (args.beta1, args.beta2))
     
-    optimizerG = optim.Adam(netG.parameters(), lr=args.lr_g, betas = (args.beta1, args.beta2))
+    optimizerG = torch.optim.AdamW(netG.parameters(), lr=1e-4, weight_decay=1e-5)
     
     if args.use_ema:
         optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
@@ -283,7 +241,7 @@ def train(rank, gpu, args):
 
     
     exp = args.exp
-    parent_dir = "./saved_info/dd_gan/{}".format(args.dataset)
+    parent_dir = "./saved_info/dd_gan/{}".format("brats")
 
     exp_path = os.path.join(parent_dir,exp)
     if rank == 0:
@@ -533,7 +491,11 @@ if __name__ == '__main__':
     
     #geenrator and training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
-    parser.add_argument('--dataset', default='cifar10', help='name of dataset')
+    parser.add_argument('--data_dir', type=str, required=True, help='path to dataset')
+    parser.add_argument('--json_list', type=str, required=True, help='path to json list')
+    parser.add_argument('--fold', type=int, default=1)
+    parser.add_argument('--roi', type=tuple, default=(128, 128, 128))
+
     parser.add_argument('--nz', type=int, default=100)
     parser.add_argument('--num_timesteps', type=int, default=4)
 
@@ -560,8 +522,8 @@ if __name__ == '__main__':
                         help='lazy regulariation.')
 
     parser.add_argument('--save_content', action='store_true',default=False)
-    parser.add_argument('--save_content_every', type=int, default=50, help='save content for resuming every x epochs')
-    parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
+    parser.add_argument('--save_content_every', type=int, default=2, help='save content for resuming every x epochs')
+    parser.add_argument('--save_ckpt_every', type=int, default=1, help='save ckpt every x epochs')
    
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,

@@ -44,3 +44,6 @@ Thumbs.db
 *.mov
 *.wmv
 
+/swin_unitr/TrainingData
+/swin_unitr/TrainedModel
+
