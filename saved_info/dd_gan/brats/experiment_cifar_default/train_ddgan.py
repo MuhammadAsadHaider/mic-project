@@ -212,9 +212,6 @@ def train(rank, gpu, args):
                                 t_emb_dim = args.t_emb_dim,
                                 act=nn.LeakyReLU(0.2)).to(device)
     
-    # broadcast_params(netG.parameters())
-    # broadcast_params(netD.parameters())
-    
     optimizerD = optim.Adam(netD.parameters(), lr=args.lr_d, betas = (args.beta1, args.beta2))
     
     optimizerG = torch.optim.AdamW(netG.parameters(), lr=1e-4, weight_decay=1e-5)
@@ -224,14 +221,7 @@ def train(rank, gpu, args):
     
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerG, args.num_epoch, eta_min=1e-5)
     schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
-    
-    
-    
-    #ddp
-    # netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
-    # netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
-    
     exp = args.exp
     parent_dir = "./saved_info/dd_gan/{}".format("brats")
 
@@ -269,9 +259,7 @@ def train(rank, gpu, args):
     
     
     for epoch in range(init_epoch, args.num_epoch+1):
-        for iteration, batch_data in enumerate(data_loader):
-            x = batch_data["image"]
-            y = batch_data["label"]
+        for iteration, (x, y) in enumerate(data_loader):
             for p in netD.parameters():  
                 p.requires_grad = True  
         
@@ -416,7 +404,7 @@ def init_processes(rank, size, fn, args):
     os.environ['MASTER_PORT'] = '6020'
     torch.cuda.set_device(args.local_rank)
     gpu = args.local_rank
-    dist.init_process_group(backend='nccl', init_method='env://', rank=rank, world_size=size)
+    dist.init_process_group(backend='gloo', init_method='env://', rank=rank, world_size=size)
     fn(rank, gpu, args)
     dist.barrier()
     cleanup()  
@@ -493,8 +481,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--z_emb_dim', type=int, default=256)
     parser.add_argument('--t_emb_dim', type=int, default=256)
-    parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
-    parser.add_argument('--num_epoch', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
+    parser.add_argument('--num_epoch', type=int, default=1200)
     parser.add_argument('--ngf', type=int, default=64)
 
     parser.add_argument('--lr_g', type=float, default=1.5e-4, help='learning rate g')

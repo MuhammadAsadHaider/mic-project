@@ -78,7 +78,6 @@ def get_loader(batch_size, data_dir, json_list, fold, roi, num_replicas, rank):
     )
 
     train_ds = data.Dataset(data=train_files, transform=train_transform)
-    train_sampler = data.distributed.DistributedSampler(train_files, num_replicas, rank)
 
     train_loader = data.DataLoader(
         train_ds,
@@ -86,7 +85,6 @@ def get_loader(batch_size, data_dir, json_list, fold, roi, num_replicas, rank):
         shuffle=True,
         num_workers=4,
         pin_memory=True,
-        sampler=train_sampler,
     )
     val_ds = data.Dataset(data=validation_files, transform=val_transform)
     val_loader = data.DataLoader(
@@ -98,4 +96,4 @@ def get_loader(batch_size, data_dir, json_list, fold, roi, num_replicas, rank):
     )
 
 
-    return train_loader, train_sampler, val_loader
+    return train_loader, val_loader

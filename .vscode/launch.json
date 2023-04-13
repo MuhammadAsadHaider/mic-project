@@ -1,0 +1,26 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "train_ddgan.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "conda":"C:/Users/mu979926/AppData/Local/anaconda3/condabin/conda",
+                "CUDA_HOME": "C:/Users/mu979926/AppData/Local/anaconda3/pkgs/cuda-nvcc-12.1.66-0/bin"
+            },
+            "args": [
+                "--data_dir",
+                "swin_unitr",
+                "--json_list",
+                "swin_unitr/brats21_folds.json"
+            ]
+        }
+    ]
+}
