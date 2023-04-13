@@ -272,6 +272,9 @@ def train(rank, gpu, args):
         for iteration, batch_data in enumerate(data_loader):
             x = batch_data["image"]
             y = batch_data["label"]
+            # convert y to int
+            y = y.type(torch.float)
+
             for p in netD.parameters():  
                 p.requires_grad = True  
         
@@ -279,7 +282,7 @@ def train(rank, gpu, args):
             netD.zero_grad()
             
             #sample from p(x_0)
-            real_data = x.to(device, non_blocking=True)
+            real_data = y.to(device, non_blocking=True) # changed from x to y for brats
             
             #sample t
             t = torch.randint(0, args.num_timesteps, (real_data.size(0),), device=device)
@@ -495,7 +498,7 @@ if __name__ == '__main__':
     parser.add_argument('--t_emb_dim', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=100)
-    parser.add_argument('--ngf', type=int, default=64)
+    parser.add_argument('--ngf', type=int, default=32)
 
     parser.add_argument('--lr_g', type=float, default=1.5e-4, help='learning rate g')
     parser.add_argument('--lr_d', type=float, default=1e-4, help='learning rate d')
