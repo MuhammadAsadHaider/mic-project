@@ -20,7 +20,7 @@ import torchvision
 from torch.multiprocessing import Process
 import torch.distributed as dist
 import shutil
-from swin_unitr.utils import get_loader
+from swin_unitr.utils import get_loader, GeneratorSwinUnitr
 from monai.networks.nets import SwinUNETR
 
 def copy_source(file, output_dir):
@@ -197,16 +197,7 @@ def train(rank, gpu, args):
     
     data_loader, val_loader = get_loader(batch_size, args.data_dir, args.json_list, args.fold, args.roi, args.world_size, rank)
     
-    netG = SwinUNETR(
-        img_size=args.roi,
-        in_channels=4,
-        out_channels=3,
-        feature_size=48,
-        drop_rate=0.0,
-        attn_drop_rate=0.0,
-        dropout_path_rate=0.0,
-        use_checkpoint=True,
-    ).to(device)
+    netG = GeneratorSwinUnitr(args).to(device)
     
     netD = Discriminator_large(nc = 2*args.num_channels, ngf = args.ngf, 
                                 t_emb_dim = args.t_emb_dim,
@@ -328,7 +319,7 @@ def train(rank, gpu, args):
             latent_z = torch.randn(batch_size, nz, device=device)
             
          
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_0_predict = netG(x.detach(), t, latent_z)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
             
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)

@@ -30,9 +30,7 @@
 import torch
 import numpy as np
 
-
 _MODELS = {}
-
 
 def register_model(cls=None, *, name=None):
   """A decorator for registering model classes."""
@@ -146,3 +144,4 @@ def to_flattened_numpy(x):
 def from_flattened_numpy(x, shape):
   """Form a torch tensor with the given `shape` from a flattened numpy array `x`."""
   return torch.from_numpy(x.reshape(shape))
+

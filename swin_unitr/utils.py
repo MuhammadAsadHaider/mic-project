@@ -3,6 +3,13 @@ import os
 import json
 from monai import transforms
 from monai import data
+from monai.networks.nets import SwinUNETR
+import torch
+import torch.nn as nn
+
+from score_sde.models import dense_layer, layers
+
+dense = dense_layer.dense
 
 class AverageMeter(object):
     def __init__(self):
@@ -97,3 +104,45 @@ def get_loader(batch_size, data_dir, json_list, fold, roi, num_replicas, rank):
 
 
     return train_loader, val_loader
+
+
+
+class PixelNorm(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input):
+        return input / torch.sqrt(torch.mean(input ** 2, dim=1, keepdim=True) + 1e-8)
+
+class GeneratorSwinUnitr(torch.nn.Module):
+  """A generator that uses Swin-UNI as the base model."""
+
+  def __init__(self, args):
+    super().__init__()
+    self.act = act = nn.SiLU()
+
+    self.base_model = SwinUNETR(
+        img_size=args.roi,
+        in_channels=4,
+        out_channels=3,
+        feature_size=48,
+        drop_rate=0.0,
+        attn_drop_rate=0.0,
+        dropout_path_rate=0.0,
+        use_checkpoint=True,
+    )
+    # self.base_model.load_state_dict(torch.load(args.base_model_ckpt))
+
+    mapping_layers = [PixelNorm(),
+                      dense(args.nz, args.z_emb_dim),
+                      act,]
+    for _ in range(args.n_mlp):
+        mapping_layers.append(dense(args.z_emb_dim, args.z_emb_dim))
+        mapping_layers.append(act)
+    self.z_transform = nn.Sequential(*mapping_layers)
+    self.nf = args.num_channels_dae
+
+  def forward(self, x, time_cond, z):
+    zemb = self.z_transform(z)
+    temb = layers.get_timestep_embedding(time_cond, self.nf)
+    return self.base_model(x)
