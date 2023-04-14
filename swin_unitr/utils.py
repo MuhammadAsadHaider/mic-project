@@ -123,7 +123,7 @@ class GeneratorSwinUnitr(torch.nn.Module):
 
     self.base_model = SwinUNETR(
         img_size=args.roi,
-        in_channels=4,
+        in_channels=8,
         out_channels=3,
         feature_size=48,
         drop_rate=0.0,
@@ -142,7 +142,13 @@ class GeneratorSwinUnitr(torch.nn.Module):
     self.z_transform = nn.Sequential(*mapping_layers)
     self.nf = args.num_channels_dae
 
-  def forward(self, x, time_cond, z):
+  def forward(self, x, x_tp1, time_cond, z):
     zemb = self.z_transform(z)
     temb = layers.get_timestep_embedding(time_cond, self.nf)
+    # add the time embedding to the latent code
+    latent = zemb + temb
+    _, dim = latent.shape
+    latent = latent.reshape((1, 1, dim, 1, 1))
+    latent = latent.repeat((1, 1, 1, dim, dim))
+    x = torch.cat([x, x_tp1, latent], dim=1)
     return self.base_model(x)

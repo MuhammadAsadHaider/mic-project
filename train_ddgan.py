@@ -22,6 +22,7 @@ import torch.distributed as dist
 import shutil
 from swin_unitr.utils import get_loader, GeneratorSwinUnitr
 from monai.networks.nets import SwinUNETR
+from monai.losses import DiceLoss
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
@@ -257,7 +258,8 @@ def train(rank, gpu, args):
                   .format(checkpoint['epoch']))
     else:
         global_step, epoch, init_epoch = 0, 0, 0
-    
+
+    dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
     
     for epoch in range(init_epoch, args.num_epoch+1):
         for iteration, batch_data in enumerate(data_loader):
@@ -318,8 +320,8 @@ def train(rank, gpu, args):
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
             
-         
-            x_0_predict = netG(x.detach(), t, latent_z)
+            x = x.detach().to(device)
+            x_0_predict = netG(x, x_tp1.detach(), t, latent_z)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
             
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
@@ -349,23 +351,23 @@ def train(rank, gpu, args):
             
             latent_z = torch.randn(batch_size, nz,device=device)
             
-            
-                
-           
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_0_predict = netG(x, x_tp1.detach(), t, latent_z)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
             
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-               
             
+            gen_dice_loss = dice_loss(x_pos_sample, real_data)
             errG = F.softplus(-output)
             errG = errG.mean()
-            
+            temp = errG
+            errG = errG + gen_dice_loss
+
+            # print epoch and iteration number and both losses every 100 iterations
+            print('epoch {} iteration{}, G Loss 1: {}, G Loss 2: {}, D Loss: {}'.format(epoch, iteration, temp.item(), gen_dice_loss.item(), errD.item()))
+
             errG.backward()
             optimizerG.step()
                 
-           
-            
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
@@ -485,7 +487,7 @@ if __name__ == '__main__':
     parser.add_argument('--nz', type=int, default=100)
     parser.add_argument('--num_timesteps', type=int, default=4)
 
-    parser.add_argument('--z_emb_dim', type=int, default=256)
+    parser.add_argument('--z_emb_dim', type=int, default=128)
     parser.add_argument('--t_emb_dim', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=100)
@@ -522,8 +524,8 @@ if __name__ == '__main__':
                         help='rank of process in the node')
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
+    parser.add_argument('--base_model_ckpt', type=str, default='swin_unitr/TrainedModel/model.pt')
 
-   
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
     # size = args.num_process_per_node
