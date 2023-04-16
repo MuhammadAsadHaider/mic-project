@@ -21,7 +21,6 @@ from torch.multiprocessing import Process
 import torch.distributed as dist
 import shutil
 from swin_unitr.utils import get_loader, GeneratorSwinUnitr
-from monai.networks.nets import SwinUNETR
 from monai.losses import DiceLoss
 
 def copy_source(file, output_dir):
@@ -204,8 +203,8 @@ def train(rank, gpu, args):
                                 t_emb_dim = args.t_emb_dim,
                                 act=nn.LeakyReLU(0.2)).to(device)
     
-    # broadcast_params(netG.parameters())
-    # broadcast_params(netD.parameters())
+    broadcast_params(netG.parameters())
+    broadcast_params(netD.parameters())
     
     optimizerD = optim.Adam(netD.parameters(), lr=args.lr_d, betas = (args.beta1, args.beta2))
     
@@ -220,8 +219,8 @@ def train(rank, gpu, args):
     
     
     #ddp
-    # netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
-    # netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
+    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     
     exp = args.exp
@@ -528,26 +527,25 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
-    # size = args.num_process_per_node
-    train(0, args.local_rank, args)
+    size = args.num_process_per_node
 
-    # if size > 1:
-    #     processes = []
-    #     for rank in range(size):
-    #         args.local_rank = rank
-    #         global_rank = rank + args.node_rank * args.num_process_per_node
-    #         global_size = args.num_proc_node * args.num_process_per_node
-    #         args.global_rank = global_rank
-    #         print('Node rank %d, local proc %d, global proc %d' % (args.node_rank, rank, global_rank))
-    #         p = Process(target=init_processes, args=(global_rank, global_size, train, args))
-    #         p.start()
-    #         processes.append(p)
+    if size > 1:
+        processes = []
+        for rank in range(size):
+            args.local_rank = rank
+            global_rank = rank + args.node_rank * args.num_process_per_node
+            global_size = args.num_proc_node * args.num_process_per_node
+            args.global_rank = global_rank
+            print('Node rank %d, local proc %d, global proc %d' % (args.node_rank, rank, global_rank))
+            p = Process(target=init_processes, args=(global_rank, global_size, train, args))
+            p.start()
+            processes.append(p)
             
-    #     for p in processes:
-    #         p.join()
-    # else:
-    #     print('starting in debug mode')
+        for p in processes:
+            p.join()
+    else:
+        print('starting in debug mode')
         
-    #     init_processes(0, size, train, args)
+        init_processes(0, size, train, args)
    
                 
