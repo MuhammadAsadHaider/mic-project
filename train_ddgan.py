@@ -23,6 +23,7 @@ import shutil
 from swin_unitr.utils import get_loader, GeneratorSwinUnitr
 from monai.networks.nets import SwinUNETR
 from monai.losses import DiceLoss
+import gc
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
@@ -238,6 +239,12 @@ def train(rank, gpu, args):
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
     T = get_time_schedule(args, device)
+
+    if args.resume_gen:
+        checkpoint_file = os.path.join(exp_path, args.gen_ckpt_file)
+        checkpoint = torch.load(checkpoint_file, map_location=device)
+        netG.load_state_dict(checkpoint)
+        print("=> loaded generator checkpoint")
     
     if args.resume:
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -261,8 +268,10 @@ def train(rank, gpu, args):
 
     dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
     
+    init_epoch = args.res_epoch
     for epoch in range(init_epoch, args.num_epoch+1):
         for iteration, batch_data in enumerate(data_loader):
+            gc.collect()
             x = batch_data["image"]
             y = batch_data["label"]
             # convert y to int
@@ -363,15 +372,17 @@ def train(rank, gpu, args):
             errG = errG + gen_dice_loss
 
             # print epoch and iteration number and both losses every 100 iterations
-            print('epoch {} iteration{}, G Loss 1: {}, G Loss 2: {}, D Loss: {}'.format(epoch, iteration, temp.item(), gen_dice_loss.item(), errD.item()))
+            # print('epoch {} iteration{}, G Loss 1: {}, G Loss 2: {}, D Loss: {}'.format(epoch, iteration, temp.item(), gen_dice_loss.item(), errD.item()))
 
             errG.backward()
             optimizerG.step()
+
                 
             global_step += 1
             if iteration % 100 == 0:
-                if rank == 0:
-                    print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(epoch,iteration, errG.item(), errD.item()))
+                print('epoch {} iteration{}, G Loss 1: {}, G Loss 2: {}, D Loss: {}'.format(epoch, iteration, temp.item(), gen_dice_loss.item(), errD.item()))
+
+        del x, y, x_t, x_tp1, latent_z, x_0_predict, x_pos_sample, output, gen_dice_loss, errG, temp, errD_real, errD_fake, errD, D_real, grad_penalty, grad_real
         
         if not args.no_lr_decay:
             
@@ -379,12 +390,12 @@ def train(rank, gpu, args):
             schedulerD.step()
         
         if rank == 0:
-            if epoch % 10 == 0:
-                torchvision.utils.save_image(x_pos_sample, os.path.join(exp_path, 'xpos_epoch_{}.png'.format(epoch)), normalize=True)
+            # if epoch % 10 == 0:
+            #     torchvision.utils.save_image(x_pos_sample, os.path.join(exp_path, 'xpos_epoch_{}.png'.format(epoch)), normalize=True)
             
-            x_t_1 = torch.randn_like(real_data)
-            fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
-            torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)), normalize=True)
+            # x_t_1 = torch.randn_like(real_data)
+            # fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
+            # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)), normalize=True)
             
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -509,7 +520,7 @@ if __name__ == '__main__':
     parser.add_argument('--lazy_reg', type=int, default=None,
                         help='lazy regulariation.')
 
-    parser.add_argument('--save_content', action='store_true',default=False)
+    parser.add_argument('--save_content', action='store_true',default=True)
     parser.add_argument('--save_content_every', type=int, default=2, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=1, help='save ckpt every x epochs')
    
@@ -525,6 +536,10 @@ if __name__ == '__main__':
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
     parser.add_argument('--base_model_ckpt', type=str, default='swin_unitr/TrainedModel/model.pt')
+    parser.add_argument('--resume_gen', type=bool, default=False)
+    parser.add_argument('--gen_ckpt_file', type=str)
+    parser.add_argument('--res_epoch', type=int, default=0)
+
 
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node

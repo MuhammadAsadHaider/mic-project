@@ -19,7 +19,13 @@
                 "--data_dir",
                 "swin_unitr",
                 "--json_list",
-                "swin_unitr/brats21_folds.json"
+                "swin_unitr/brats21_folds.json",
+                "--resume_gen",
+                "True",
+                "--gen_ckpt_file",
+                "netG_2.pth",
+                "--res_epoch",
+                "2"
             ]
         }
     ]

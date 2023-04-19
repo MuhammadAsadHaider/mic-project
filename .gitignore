@@ -47,3 +47,4 @@ Thumbs.db
 /swin_unitr/TrainingData
 /swin_unitr/TrainedModel
 
+*.pth
