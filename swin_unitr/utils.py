@@ -80,6 +80,16 @@ def get_loader(batch_size, data_dir, json_list, fold, roi, num_replicas, rank):
         [
             transforms.LoadImaged(keys=["image", "label"]),
             transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
+            transforms.CropForegroundd(
+                keys=["image", "label"],
+                source_key="image",
+                k_divisible=[roi[0], roi[1], roi[2]],
+            ),
+            transforms.RandSpatialCropd(
+                keys=["image", "label"],
+                roi_size=[roi[0], roi[1], roi[2]],
+                random_size=False,
+            ),
             transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
         ]
     )

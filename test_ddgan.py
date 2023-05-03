@@ -10,9 +10,10 @@ import numpy as np
 
 import os
 
-import torchvision
-from score_sde.models.ncsnpp_generator_adagn import NCSNpp
-from pytorch_fid.fid_score import calculate_fid_given_paths
+from swin_unitr.utils import get_loader, GeneratorSwinUnitr
+from monai.losses import DiceLoss
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 #%% Diffusion coefficients 
 def var_func_vp(t, beta_min, beta_max):
@@ -112,81 +113,77 @@ def sample_posterior(coefficients, x_0,x_t, t):
     
     return sample_x_pos
 
-def sample_from_model(coefficients, generator, n_time, x_init, T, opt):
-    x = x_init
+def sample_from_model(coefficients, generator, n_time, x, x_tp1, T, opt):
     with torch.no_grad():
         for i in reversed(range(n_time)):
             t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
             
             t_time = t
             latent_z = torch.randn(x.size(0), opt.nz, device=x.device)#.to(x.device)
-            x_0 = generator(x, t_time, latent_z)
-            x_new = sample_posterior(coefficients, x_0, x, t)
-            x = x_new.detach()
+            x_0 = generator(x, x_tp1, t_time, latent_z)
+
+            x_new = sample_posterior(coefficients, x_0, x_tp1, t)
+            x_tp1 = x_new.detach()
         
-    return x
+    return x_tp1
 
 #%%
 def sample_and_test(args):
     torch.manual_seed(42)
     device = 'cuda:0'
-    
-    if args.dataset == 'cifar10':
-        real_img_dir = 'pytorch_fid/cifar10_train_stat.npy'
-    elif args.dataset == 'celeba_256':
-        real_img_dir = 'pytorch_fid/celeba_256_stat.npy'
-    elif args.dataset == 'lsun':
-        real_img_dir = 'pytorch_fid/lsun_church_stat.npy'
-    else:
-        real_img_dir = args.real_img_dir
-    
-    to_range_0_1 = lambda x: (x + 1.) / 2.
-
-    
-    netG = NCSNpp(args).to(device)
-    ckpt = torch.load('./saved_info/dd_gan/{}/{}/netG_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    
-    #loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
-    netG.load_state_dict(ckpt)
-    netG.eval()
-    
-    
+    netG = GeneratorSwinUnitr(args).to(device)
+    data_loader, val_loader = get_loader(1, args.data_dir, args.json_list, args.fold, args.roi, 1, 0)
+    dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
     T = get_time_schedule(args, device)
+    average_training_losses = []
+    average_validation_losses = []
     
     pos_coeff = Posterior_Coefficients(args, device)
+    for i in range(20):
+        ckpt = torch.load(f'./saved_info/dd_gan/brats/experiment_cifar_default/netG_{i}.pth', map_location=device)
         
-    iters_needed = 50000 //args.batch_size
-    
-    save_dir = "./generated_samples/{}".format(args.dataset)
-    
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    
-    if args.compute_fid:
-        for i in range(iters_needed):
-            with torch.no_grad():
-                x_t_1 = torch.randn(args.batch_size, args.num_channels,args.image_size, args.image_size).to(device)
-                fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args)
-                
-                fake_sample = to_range_0_1(fake_sample)
-                for j, x in enumerate(fake_sample):
-                    index = i * args.batch_size + j 
-                    torchvision.utils.save_image(x, './generated_samples/{}/{}.jpg'.format(args.dataset, index))
-                print('generating batch ', i)
-        
-        paths = [save_dir, real_img_dir]
-    
-        kwargs = {'batch_size': 100, 'device': device, 'dims': 2048}
-        fid = calculate_fid_given_paths(paths=paths, **kwargs)
-        print('FID = {}'.format(fid))
-    else:
-        x_t_1 = torch.randn(args.batch_size, args.num_channels,args.image_size, args.image_size).to(device)
-        fake_sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x_t_1,T,  args)
-        fake_sample = to_range_0_1(fake_sample)
-        torchvision.utils.save_image(fake_sample, './samples_{}.jpg'.format(args.dataset))
+        netG.load_state_dict(ckpt)
+        netG.eval()
+        training_loss = 0.0
+        validation_loss = 0.0
+        for iteration, batch_data in enumerate(data_loader):
+            x = batch_data["image"].to(device)
+            y = batch_data["label"].to(device)
+            y = y.type(torch.float)
 
+            x_t_1 = torch.randn(1, 3, 128, 128, 128).to(device)
+            sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x, x_t_1, T, args)
+            gen_dice_loss = dice_loss(sample, y)
+            training_loss += gen_dice_loss.item()
+            if iteration % 10 == 0:
+                print(f'{iteration} complete')
+        average_training_loss = training_loss/len(data_loader)
+        print(f'Epoch {i} training loss: {average_training_loss}')
+        average_training_losses.append(average_training_loss)
+
+        for iteration, batch_data in enumerate(val_loader):
+            x = batch_data["image"].to(device)
+            y = batch_data["label"].to(device)
+            y = y.type(torch.float)
+
+            x_t_1 = torch.randn(1, 3, 128, 128, 128).to(device)
+            sample = sample_from_model(pos_coeff, netG, args.num_timesteps, x, x_t_1, T, args)
+            gen_dice_loss = dice_loss(sample, y)
+            validation_loss += gen_dice_loss.item()
+            if iteration % 10 == 0:
+                print(f'{iteration} complete')
+        average_validation_loss = validation_loss/len(val_loader)
+        print(f'Epoch {i} validation loss: {average_validation_loss}')
+        average_validation_losses.append(average_validation_loss)
+
+        if i % 5 == 0:
+            plt.plot(average_training_losses, label='Training Loss')
+            plt.plot(average_validation_losses, label='Validation Loss')
+            plt.legend()
+            plt.savefig(f'losses_{i}.png')
+
+    return average_training_losses, average_validation_losses
+            
     
     
             
@@ -259,17 +256,26 @@ if __name__ == '__main__':
     parser.add_argument('--num_timesteps', type=int, default=4)
     
     
-    parser.add_argument('--z_emb_dim', type=int, default=256)
+    parser.add_argument('--z_emb_dim', type=int, default=128)
     parser.add_argument('--t_emb_dim', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=200, help='sample generating batch size')
         
-
+    parser.add_argument('--data_dir', type=str, required=True, help='path to dataset')
+    parser.add_argument('--json_list', type=str, required=True, help='path to json list')
+    parser.add_argument('--fold', type=int, default=1)
+    parser.add_argument('--roi', type=tuple, default=(128, 128, 128))
 
 
    
     args = parser.parse_args()
     
-    sample_and_test(args)
+    t_losses, v_losses = sample_and_test(args)
+    # plot and save the training and validation losses
+    plt.plot(t_losses, label='Training Loss')
+    plt.plot(v_losses, label='Validation Loss')
+    plt.legend()
+    plt.savefig('losses.png')
+
     
    
                 
